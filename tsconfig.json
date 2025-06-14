@@ -1,0 +1,11 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",                 // Modern JavaScript features (e.g., optional chaining)
+    "module": "commonjs",               // Required by Node.js runtime
+    "strict": true,                     // Enables strict type-checking (recommended for safety)
+    "esModuleInterop": true,            // Allows using `import x from 'x'` with CommonJS modules
+    "outDir": "./dist",                 // Compiled files will go to `dist/` (though esbuild handles this too)
+    "baseUrl": "./src"                  // Allows absolute imports like `import x from "utils/x"`
+  },
+  "include": ["src"]                    // Only compile files inside `src/`
+}

@@ -1,0 +1,185 @@
+service: async-api-message-board
+
+frameworkVersion: '>=3.0.0'
+
+provider:
+  name: aws
+  runtime: nodejs18.x
+  region: ap-southeast-2
+  environment:
+    USERS_TABLE: UsersTable
+    BOARDS_TABLE: BoardsTable
+    MESSAGES_TABLE: MessagesTable
+    USER_CREATED_TOPIC: arn:aws:sns:ap-southeast-2:${aws:accountId}:userCreatedTopicTsManual
+    MESSAGE_POSTED_TOPIC: arn:aws:sns:ap-southeast-2:${aws:accountId}:messagePostedTopicTsManual
+    CREATE_BOARD_QUEUE: createBoardQueue
+    CONNECTIONS_TABLE: WebSocketConnections
+    WEBSOCKET_API_ENDPOINT: https://${aws:accountId}.execute-api.ap-southeast-2.amazonaws.com/dev
+    REALTIME_SNS_TOPIC: arn:aws:sns:ap-southeast-2:${aws:accountId}:realtimeBroadcastTopic
+
+  iamRoleStatements:
+    # Allow full access to all defined DynamoDB tables
+    - Effect: Allow
+      Action:
+        - dynamodb:PutItem
+        - dynamodb:GetItem
+        - dynamodb:Scan
+        - dynamodb:Query
+        - dynamodb:DeleteItem
+      Resource:
+        - arn:aws:dynamodb:ap-southeast-2:${aws:accountId}:table/UsersTable
+        - arn:aws:dynamodb:ap-southeast-2:${aws:accountId}:table/BoardsTable
+        - arn:aws:dynamodb:ap-southeast-2:${aws:accountId}:table/MessagesTable
+        - arn:aws:dynamodb:ap-southeast-2:${aws:accountId}:table/WebSocketConnections
+
+    # Allow SNS publishing (e.g. to userCreated, messagePosted, broadcast topics)
+    - Effect: Allow
+      Action:
+        - sns:Publish
+      Resource: "*"
+
+    # Allow sending messages to the SQS queue
+    - Effect: Allow
+      Action:
+        - sqs:SendMessage
+      Resource: "*"
+
+    # Required to post messages to connected WebSocket clients
+    - Effect: Allow
+      Action:
+        - execute-api:ManageConnections
+      Resource: arn:aws:execute-api:ap-southeast-2:*:*/*/@connections/*
+
+plugins:
+  - serverless-esbuild
+  - serverless-offline
+  - serverless-dynamodb-local
+
+functions:
+  registerUser:
+    handler: src/handlers/registerUser.handler
+    events:
+      - http:
+          path: users/register
+          method: post
+
+  createUser:
+    handler: src/handlers/createUser.handler
+    # Manually subscribed to USER_CREATED_TOPIC
+
+  getUserByEmail:
+    handler: src/handlers/getUserByEmail.handler
+    events:
+      - http:
+          path: users
+          method: get
+
+  listBoards:
+    handler: src/handlers/listBoards.handler
+    events:
+      - http:
+          path: boards
+          method: get
+
+  createBoard:
+    handler: src/handlers/createBoard.handler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt: [CreateBoardQueue, Arn]
+
+  createBoardRequest:
+    handler: src/handlers/createBoardRequest.handler
+    events:
+      - http:
+          path: boards
+          method: post
+
+  postMessage:
+    handler: src/handlers/postMessage.handler
+    events:
+      - http:
+          path: boards/{boardId}/messages
+          method: post
+
+  processPostedMessage:
+    handler: src/handlers/processPostedMessage.handler
+    # Manually subscribed to MESSAGE_POSTED_TOPIC
+
+  onConnect:
+    handler: src/websocket/onConnect.handler
+    events:
+      - websocket:
+          route: $connect
+
+  onDisconnect:
+    handler: src/websocket/onDisconnect.handler
+    events:
+      - websocket:
+          route: $disconnect
+
+  broadcastMessage:
+    handler: src/websocket/broadcastMessage.handler
+    events:
+      - sns:
+          arn: arn:aws:sns:ap-southeast-2:${aws:accountId}:realtimeBroadcastTopic
+
+resources:
+  Resources:
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: UsersTable
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: email
+            AttributeType: S
+        KeySchema:
+          - AttributeName: email
+            KeyType: HASH
+
+    BoardsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: BoardsTable
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: boardId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: boardId
+            KeyType: HASH
+
+    MessagesTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: MessagesTable
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: messageId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: messageId
+            KeyType: HASH
+
+    CreateBoardQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: createBoardQueue
+
+    WebSocketConnections:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: WebSocketConnections
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: connectionId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: connectionId
+            KeyType: HASH
+
+    RealtimeBroadcastTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: realtimeBroadcastTopic
